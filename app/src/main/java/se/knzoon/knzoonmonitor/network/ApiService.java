@@ -10,6 +10,6 @@ public interface ApiService {
     // Base URL: https://painthelper.knzoon.se/
     // Endpoint: api/turfeffort
     // Query parameter: username
-    @GET("api/turfeffort")
+    @GET("api/turfefforts")
     Call<TurfEffort> turfeffort(@Query("username") String username);
 }
