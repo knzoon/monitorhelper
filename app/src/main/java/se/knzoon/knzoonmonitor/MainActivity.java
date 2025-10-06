@@ -1,10 +1,6 @@
 package se.knzoon.knzoonmonitor;
 
 import android.Manifest;
-import android.app.NotificationChannel;
-import android.app.NotificationManager;
-import android.app.PendingIntent;
-import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -19,14 +15,19 @@ import androidx.activity.EdgeToEdge;
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.NotificationCompat;
-import androidx.core.app.NotificationManagerCompat;
 import androidx.core.content.ContextCompat;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.work.Constraints;
+import androidx.work.Data;
+import androidx.work.ExistingPeriodicWorkPolicy;
+import androidx.work.NetworkType;
+import androidx.work.PeriodicWorkRequest;
+import androidx.work.WorkManager;
 
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 
 import retrofit2.Call;
 import retrofit2.Callback;
@@ -34,13 +35,15 @@ import retrofit2.Response;
 import se.knzoon.knzoonmonitor.model.TurfEffort;
 import se.knzoon.knzoonmonitor.network.ApiService;
 import se.knzoon.knzoonmonitor.network.RetrofitClientInstance;
+import se.knzoon.knzoonmonitor.notification.NotificationHelper;
+import se.knzoon.knzoonmonitor.worker.TurfEffortWorker;
 
 public class MainActivity extends AppCompatActivity {
     private TextView myTextView;
     private EditText usernameEditText;
     private static final String TAG = "MainActivity";
-    private static final String CHANNEL_ID = "turf_effort_error_channel";
-    private static final int NOTIFICATION_ID = 101;
+
+    private static final String UNIQUE_WORK_NAME = "turfEffortPeriodicWork";
 
     // Declare the launcher at the top of your Activity/Fragment
     private ActivityResultLauncher<String> requestPermissionLauncher =
@@ -67,14 +70,17 @@ public class MainActivity extends AppCompatActivity {
             return insets;
         });
 
-        createNotificationChannel(); // Create channel on app start
+        NotificationHelper.createNotificationChannel(this); // Create channel
         requestNotificationPermission(); // Request permission
 
-        Button myButton = findViewById(R.id.myButton);
+        Button scheduleButton = findViewById(R.id.myButton);
+        Button cancelButton = findViewById(R.id.cancelButton);
         myTextView = findViewById(R.id.textView);
         usernameEditText = findViewById(R.id.usernameEditText);
 
-        myButton.setOnClickListener(v -> {
+        scheduleButton.setText("Start/Update Monitoring");
+
+        scheduleButton.setOnClickListener(v -> {
             String username = usernameEditText.getText().toString().trim();
 
             if (TextUtils.isEmpty(username)) {
@@ -82,9 +88,50 @@ public class MainActivity extends AppCompatActivity {
                 return; // Don't proceed if username is empty
             }
 
-            // Action to perform when the button is clicked
-            fetchTurfEffort(username);
+            // You might want to save this username to SharedPreferences so the worker can access it
+            // if the app is not running or if it needs to pick up the latest username.
+            // For now, we'll pass it as input data to the worker.
+            scheduleTurfEffortWork(username);
+            Toast.makeText(MainActivity.this, "Monitoring scheduled for " + username, Toast.LENGTH_LONG).show();
+            myTextView.setText("Turf effort monitoring for '" + username + "' is scheduled to run every 15 minutes.");
         });
+
+        // --- Set OnClickListener for the NEW Cancel button ---
+        cancelButton.setOnClickListener(v -> {
+            WorkManager.getInstance(getApplicationContext()).cancelUniqueWork(UNIQUE_WORK_NAME);
+            Toast.makeText(MainActivity.this, "Monitoring cancelled.", Toast.LENGTH_SHORT).show();
+            myTextView.setText("Monitoring has been cancelled.");
+            Log.i(TAG, "User cancelled unique work: " + UNIQUE_WORK_NAME);
+        });
+
+    }
+
+    private void scheduleTurfEffortWork(String username) {
+        // Create input data for the worker
+        Data inputData = new Data.Builder()
+                .putString(TurfEffortWorker.KEY_USERNAME, username)
+                .build();
+
+        // Define constraints (e.g., network needed)
+        Constraints constraints = new Constraints.Builder()
+                .setRequiredNetworkType(NetworkType.CONNECTED) // Only run when network is available
+                .build();
+
+        PeriodicWorkRequest turfEffortRequest =
+                new PeriodicWorkRequest.Builder(TurfEffortWorker.class, 15, TimeUnit.MINUTES)
+                        // For flex time, if needed: .setFlexTimeInterval(5, TimeUnit.MINUTES)
+                        .setConstraints(constraints)
+                        .setInputData(inputData)
+                        // .addTag("turf_monitoring") // Optional tag
+                        .build();
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+                UNIQUE_WORK_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE, // Or KEEP if you don't want to replace if already scheduled
+                turfEffortRequest
+        );
+
+        Log.i(TAG, "Periodic work scheduled for " + username + " with interval 15 minutes.");
     }
 
     private void requestNotificationPermission() {
@@ -107,91 +154,4 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void createNotificationChannel() {
-        // Create the NotificationChannel, but only on API 26+ because
-        // the NotificationChannel class is new and not in the support library
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            CharSequence name = getString(R.string.channel_name); // You'll need to add this string resource
-            String description = getString(R.string.channel_description); // And this one
-            int importance = NotificationManager.IMPORTANCE_DEFAULT;
-            NotificationChannel channel = new NotificationChannel(CHANNEL_ID, name, importance);
-            channel.setDescription(description);
-            // Register the channel with the system; you can't change the importance
-            // or other notification behaviors after this
-            NotificationManager notificationManager = getSystemService(NotificationManager.class);
-            if (notificationManager != null) {
-                notificationManager.createNotificationChannel(channel);
-                Log.d(TAG, "Notification channel created.");
-            } else {
-                Log.e(TAG, "NotificationManager is null. Cannot create notification channel.");
-            }
-        }
-    }
-
-    private void fetchTurfEffort(String username) {
-        myTextView.setText("Fetching data with Retrofit...");
-        ApiService service = RetrofitClientInstance.getRetrofitInstance().create(ApiService.class);
-        Call<TurfEffort> call = service.turfeffort(username);
-
-        call.enqueue(new Callback<TurfEffort>() {
-            @Override
-            public void onResponse(Call<TurfEffort> call, Response<TurfEffort> response) {
-                if (response.isSuccessful() && response.body() != null) {
-                    TurfEffort turfEffort = response.body();
-                    myTextView.setText(turfEffort.toString());
-                    Log.d(TAG, "API Response for " + username + ": " + turfEffort.toString());
-                } else {
-                    String errorMsg = "Failed to fetch turfeffort for " + username + ". Code: " + response.code();
-                    myTextView.setText(errorMsg);
-                    String errorBodyString = "Unknown error";
-                    try {
-                        errorBodyString = response.errorBody() != null ? response.errorBody().string() : "No additional error info";
-                        Log.e(TAG, "Error body: " + errorBodyString);
-                        myTextView.append("\nError Details: " + errorBodyString);
-                    } catch (Exception e) {
-                        Log.e(TAG, "Error parsing error body", e);
-                    }
-                    // Send notification on failure
-                    sendErrorNotification("API Error: " + response.code(),
-                            "Could not fetch turf effort for " + username + ". " + errorBodyString);
-                }
-            }
-
-            @Override
-            public void onFailure(Call<TurfEffort> call, Throwable t) {
-                myTextView.setText("API call failed: " + t.getMessage());
-                Log.e(TAG, "API call failed", t);
-                Toast.makeText(MainActivity.this, "Network Error: " + t.getMessage(), Toast.LENGTH_LONG).show();
-                sendErrorNotification("Network Error",
-                        "Failed to connect: " + t.getMessage());
-            }
-        });
-    }
-
-    private void sendErrorNotification(String title, String message) {
-        // Create an explicit intent for an Activity in your app
-        Intent intent = new Intent(this, MainActivity.class); // Or any other activity you want to open
-        intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
-        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE);
-
-        NotificationCompat.Builder builder = new NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_notification_error) // Create this drawable
-                .setContentTitle(title)
-                .setContentText(message)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-                .setContentIntent(pendingIntent) // Set the intent that will fire when the user taps the notification
-                .setAutoCancel(true); // Automatically removes the notification when the user taps it
-
-        NotificationManagerCompat notificationManager = NotificationManagerCompat.from(this);
-
-        // notificationId is a unique int for each notification that you must define
-        try {
-            notificationManager.notify(NOTIFICATION_ID, builder.build());
-        } catch (SecurityException e) {
-            // This can happen if the POST_NOTIFICATIONS permission is not granted on Android 13+
-            Log.e(TAG, "Missing POST_NOTIFICATIONS permission. Cannot show notification.", e);
-            Toast.makeText(this, "Notification permission missing. Cannot show error notification.", Toast.LENGTH_LONG).show();
-            // Consider guiding the user to grant the permission
-        }
-    }
 }

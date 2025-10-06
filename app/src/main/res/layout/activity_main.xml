@@ -22,19 +22,31 @@
         app:layout_constraintBottom_toTopOf="@+id/myButton"
         app:layout_constraintVertical_chainStyle="packed"
         app:layout_constraintVertical_bias="0.3"/>
-    <!-- Adjust bias or add more constraints as needed for positioning -->
 
-
+    <!-- This is the existing "Start/Update" button -->
     <Button
         android:id="@+id/myButton"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="16dp"
-        android:text="Fetch Turf Effort"
+        android:text="Start/Update Monitoring"
+        app:layout_constraintHorizontal_chainStyle="packed"
         app:layout_constraintTop_toBottomOf="@+id/usernameEditText"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintEnd_toStartOf="@+id/cancelButton"
         app:layout_constraintBottom_toTopOf="@+id/textView" />
+
+    <!-- This is the NEW "Cancel" button -->
+    <Button
+        android:id="@+id/cancelButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        style="?attr/materialButtonOutlinedStyle"
+        android:text="Cancel Monitoring"
+        app:layout_constraintTop_toTopOf="@id/myButton"
+        app:layout_constraintStart_toEndOf="@id/myButton"
+        app:layout_constraintEnd_toEndOf="parent" />
 
     <TextView
         android:id="@+id/textView"
